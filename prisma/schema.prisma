@@ -1,0 +1,131 @@
+// VOIDTERM data model — PostgreSQL via Prisma.
+//
+// Ownership model: every Conversation belongs to exactly one User and every
+// query in the API layer filters by `userId`. There is no row-level security
+// in Postgres; the equivalent guarantee is enforced at the API boundary.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+model User {
+  id          String    @id @default(cuid())
+  email       String    @unique
+  name        String?
+  avatarUrl   String?
+  // Tier 2 = credentialed developer / security researcher. Tier is carried in
+  // the session JWT and re-read from the database on every authenticated call.
+  tier        Int       @default(2)
+  createdAt   DateTime  @default(now())
+  lastLoginAt DateTime?
+
+  conversations Conversation[]
+  sessions      Session[]
+  otpCodes      OtpCode[]
+}
+
+// OTP codes are keyed by email because the account may not exist yet when a
+// code is issued. `userId` is attached opportunistically if the account is
+// already known, purely for cascading cleanup on account deletion.
+model OtpCode {
+  id        String    @id @default(cuid())
+  email     String
+  otpHash   String
+  expiresAt DateTime
+  usedAt    DateTime?
+  attempts  Int       @default(0)
+  ipAddress String?
+  createdAt DateTime  @default(now())
+  userId    String?
+
+  user User? @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([email, createdAt])
+  @@index([userId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  userId    String
+  tokenHash String   @unique
+  userAgent String?
+  ipAddress String?
+  expiresAt DateTime
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@index([expiresAt])
+}
+
+model Conversation {
+  id           String    @id @default(cuid())
+  userId       String
+  title        String    @default("New chat")
+  model        String
+  systemPrompt String?   @db.Text
+  tier         Int       @default(2)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  user     User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([userId, updatedAt])
+}
+
+model Message {
+  id             String   @id @default(cuid())
+  conversationId String
+  role           String
+  content        String   @db.Text
+  tokens         Int?
+  model          String?
+  intentClass    String?
+  createdAt      DateTime @default(now())
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+  attachments  Attachment[]
+
+  @@index([conversationId, createdAt])
+}
+
+model Attachment {
+  id        String @id @default(cuid())
+  messageId String
+  fileUrl   String
+  fileType  String
+  fileSize  Int
+
+  message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
+
+  @@index([messageId])
+}
+
+model AuditLog {
+  id        String   @id @default(cuid())
+  userId    String?
+  action    String
+  metadata  Json?
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// Shared fixed-window rate-limit counters. Used only when Upstash Redis is not
+// configured, so production limits are not per-serverless-instance memory.
+model RateLimitBucket {
+  key       String   @id
+  count     Int      @default(0)
+  resetAt   DateTime
+  updatedAt DateTime @updatedAt
+
+  @@index([resetAt])
+}

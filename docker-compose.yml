@@ -1,0 +1,42 @@
+version: '3.9'
+
+# Local development services.
+# Postgres backs Prisma; Redis is provided for local tooling.
+# NOTE: application rate limiting uses Upstash's HTTP API when configured,
+# and falls back to an in-process limiter otherwise.
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: voidterm-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: voidterm
+    ports:
+      - '5432:5432'
+    volumes:
+      - voidterm_pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U postgres -d voidterm']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: voidterm-redis
+    restart: unless-stopped
+    ports:
+      - '6379:6379'
+    volumes:
+      - voidterm_redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  voidterm_pgdata:
+  voidterm_redisdata:
