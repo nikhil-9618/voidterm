@@ -10,6 +10,15 @@ export type InspectedUpload = {
   fileName: string;
 };
 
+/**
+ * Vercel Functions reject request bodies above 4.5 MB, so a larger app-level
+ * limit would only fail later with a platform error. Keep uploads below it.
+ */
+export const MAX_UPLOAD_BYTES = 4 * 1024 * 1024;
+
+/** Per-user storage quota for the Postgres-backed private attachment store. */
+export const MAX_USER_ATTACHMENT_BYTES = 50 * 1024 * 1024;
+
 const TEXT_EXTENSIONS = new Set([
   '.txt',
   '.md',
@@ -21,9 +30,18 @@ const TEXT_EXTENSIONS = new Set([
   '.ts',
   '.tsx',
   '.js',
+  '.jsx',
   '.py',
   '.sh',
   '.sql',
+]);
+
+/** MIME types whose bytes can be safely decoded and sent to a text model. */
+const TEXT_MIMES = new Set([
+  'text/plain',
+  'text/markdown',
+  'text/csv',
+  'application/json',
 ]);
 
 function startsWith(bytes: Uint8Array, signature: number[]): boolean {
@@ -51,7 +69,7 @@ function safeStem(input: string): string {
     input
       .replace(/[^a-zA-Z0-9._-]/g, '_')
       .replace(/\.{2,}/g, '.')
-      .replace(/^[_\-.]+|[_\-.]+$/g, '')
+      .replace(/^[_\-.]|[_\-.]$/g, '')
       .slice(0, 80) || 'file'
   );
 }
@@ -61,8 +79,19 @@ function result(baseName: string, originalExtension: string, mime: string, exten
   return { mime, extension, fileName: `${stem}${extension}` };
 }
 
+/**
+ * PDFs can carry JavaScript, launch actions, and embedded files. There is no
+ * malware scanner in this deployment, so active-content PDFs are rejected
+ * instead of being served back to a browser later. This is a conservative
+ * heuristic, not a guarantee.
+ */
+function hasActivePdfContent(bytes: Uint8Array): boolean {
+  const text = Buffer.from(bytes).toString('latin1');
+  return /\/(?:JavaScript|JS|Launch|EmbeddedFile|OpenAction|AA)\b/.test(text);
+}
+
 export function inspectUpload(originalName: string, bytes: Uint8Array): InspectedUpload | null {
-  if (bytes.length === 0) return null;
+  if (bytes.length === 0 || bytes.length > MAX_UPLOAD_BYTES) return null;
 
   const baseName = originalName.split(/[\\/]/).pop() ?? 'file';
   const lowerName = baseName.toLowerCase();
@@ -87,8 +116,9 @@ export function inspectUpload(originalName: string, bytes: Uint8Array): Inspecte
   }
 
   // SVG, HTML, XML and executable formats are deliberately not accepted.
-  // PDFs are only accepted with the standard PDF header.
+  // PDFs are only accepted with the standard PDF header and no active content.
   if (extension === '.pdf' && ascii(bytes, 0, '%PDF-')) {
+    if (hasActivePdfContent(bytes)) return null;
     return result(baseName, extension, 'application/pdf', '.pdf');
   }
 
@@ -107,4 +137,21 @@ export function inspectUpload(originalName: string, bytes: Uint8Array): Inspecte
   }
 
   return null;
+}
+
+/** True when a stored attachment can be decoded and included in a text prompt. */
+export function isTextAttachment(mime: string): boolean {
+  return TEXT_MIMES.has(mime);
+}
+
+/**
+ * Decode and sanitise text attachment content before it reaches a model.
+ * Control characters (except newlines and tabs) are stripped so a file cannot
+ * inject terminal escape sequences or invisible instructions.
+ */
+export function decodeTextAttachment(bytes: Uint8Array): string {
+  return new TextDecoder('utf-8', { fatal: false })
+    .decode(bytes)
+    .replace(/\u0000/g, '')
+    .replace(/[\u0001-\u0008\u000b\u000c\u000e-\u001f\u007f]/g, '');
 }

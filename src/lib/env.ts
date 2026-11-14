@@ -24,10 +24,6 @@ const envSchema = z.object({
   OLLAMA_URL: optionalUrl,
   UPSTASH_REDIS_REST_URL: optionalUrl,
   UPSTASH_REDIS_REST_TOKEN: optionalString,
-  SUPABASE_URL: optionalUrl,
-  SUPABASE_SERVICE_ROLE_KEY: optionalString,
-  SUPABASE_STORAGE_BUCKET: z
-    .preprocess(emptyToUndefined, z.string().min(1).default('attachments')),
 });
 
 export type Env = z.infer<typeof envSchema>;
@@ -52,6 +48,15 @@ function loadEnv(): Env {
 export const env = loadEnv();
 
 export const isProduction = env.NODE_ENV === 'production';
+
+// The Resend sandbox sender only delivers to the account owner's address. Make
+// this loud in logs: public sign-in will silently fail until a domain is
+// verified and EMAIL_FROM is updated.
+if (isProduction && /@resend\.dev>?$/i.test(env.EMAIL_FROM)) {
+  console.warn(
+    '[env] EMAIL_FROM uses the Resend sandbox sender. OTP delivery is restricted to the Resend account owner until a sending domain is verified.',
+  );
+}
 
 let secretWarningLogged = false;
 

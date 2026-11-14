@@ -17,6 +17,7 @@ export async function GET() {
         name: user.name,
         avatarUrl: user.avatarUrl,
         tier: user.tier,
+        mfaEnabled: user.mfaEnabled,
         createdAt: user.createdAt,
         lastLoginAt: user.lastLoginAt,
       },

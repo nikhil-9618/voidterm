@@ -22,6 +22,7 @@ export type SessionUser = {
   name: string | null;
   avatarUrl: string | null;
   tier: number;
+  mfaEnabled: boolean;
   sessionId: string;
   sessionExpiresAt: string;
   createdAt: string;
@@ -142,6 +143,7 @@ export async function getSessionFromCookies(): Promise<SessionUser | null> {
       name: session.user.name,
       avatarUrl: session.user.avatarUrl,
       tier: session.user.tier,
+      mfaEnabled: Boolean(session.user.mfaEnabledAt),
       sessionId: session.id,
       sessionExpiresAt: session.expiresAt.toISOString(),
       createdAt: session.user.createdAt.toISOString(),

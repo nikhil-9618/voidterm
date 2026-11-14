@@ -2,8 +2,9 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { prisma } from '@/lib/db';
 import { requireAuth } from '@/lib/auth';
-import { csrfRejected, isSameOrigin, jsonError, readJson, unauthorized } from '@/lib/http';
+import { csrfRejected, isSameOrigin, jsonError, rateLimited, readJson, unauthorized } from '@/lib/http';
 import { toConversationSummary } from '@/lib/dto';
+import { conversationCreateLimiter } from '@/lib/rate-limit';
 import { DEFAULT_MODEL, isSupportedModel } from '@/lib/ai/models';
 
 export const runtime = 'nodejs';
@@ -39,6 +40,9 @@ export async function POST(request: Request) {
 
   const user = await requireAuth();
   if (!user) return unauthorized();
+
+  const limit = await conversationCreateLimiter.limit(user.id);
+  if (!limit.success) return rateLimited(limit.reset);
 
   const parsed = createSchema.safeParse(await readJson(request));
   if (!parsed.success) {

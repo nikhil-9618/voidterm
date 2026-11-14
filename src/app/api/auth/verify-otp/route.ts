@@ -7,6 +7,7 @@ import { createSession, setSessionCookie } from '@/lib/auth';
 import { getClientIp, otpVerifyLimiter } from '@/lib/rate-limit';
 import { csrfRejected, isSameOrigin, jsonError, rateLimited, readJson } from '@/lib/http';
 import { audit } from '@/lib/audit';
+import { signMfaChallenge } from '@/lib/mfa';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
@@ -96,6 +97,23 @@ export async function POST(request: Request) {
 
   if (!user) {
     return jsonError(400, 'invalid_code', GENERIC_FAILURE);
+  }
+
+  // If a second factor is enrolled, the email code only earns a short-lived
+  // challenge token. No session cookie is issued until TOTP/recovery succeeds.
+  const security = await prisma.user.findUnique({
+    where: { id: user.id },
+    select: { mfaEnabledAt: true },
+  });
+
+  if (security?.mfaEnabledAt) {
+    const challenge = await signMfaChallenge(user.id);
+    await audit('auth.mfa_challenge', user.id, { ip: ipAddress });
+
+    return NextResponse.json(
+      { ok: true, mfaRequired: true, challenge },
+      { headers: { 'Cache-Control': 'private, no-store' } },
+    );
   }
 
   const sessionToken = await createSession(

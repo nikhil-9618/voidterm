@@ -56,7 +56,9 @@ export function MessageBlock({
                   rel="noopener noreferrer"
                   className="inline-flex max-w-full items-center gap-1.5 rounded-lg border border-border bg-panel px-2 py-1 text-[11px] text-muted transition-colors hover:text-fg"
                 >
-                  <span className="truncate">{attachment.fileUrl.split('/').pop()}</span>
+                  <span className="truncate">
+                    {attachment.fileName ?? attachment.fileUrl.split('/').pop()}
+                  </span>
                   <span className="shrink-0 text-dim">
                     {(attachment.fileSize / 1024).toFixed(0)} KB
                   </span>

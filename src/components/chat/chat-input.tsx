@@ -92,8 +92,8 @@ export function ChatInput({
       const uploaded: LocalAttachment[] = [];
 
       for (const file of files.slice(0, 4)) {
-        if (file.size > 10 * 1024 * 1024) {
-          setUploadError(`${file.name} is larger than 10 MB`);
+        if (file.size > 4 * 1024 * 1024) {
+          setUploadError(`${file.name} is larger than 4 MB`);
           continue;
         }
 
@@ -208,7 +208,7 @@ export function ChatInput({
                   )}
                 </Button>
               </TooltipTrigger>
-              <TooltipContent>Attach a file (10 MB max)</TooltipContent>
+              <TooltipContent>Attach a file (4 MB max)</TooltipContent>
             </Tooltip>
 
             <Popover open={matrixOpen} onOpenChange={setMatrixOpen}>

@@ -1,59 +1,21 @@
-import { randomUUID } from 'node:crypto';
-import { mkdir, writeFile } from 'node:fs/promises';
-import path from 'node:path';
 import { NextResponse } from 'next/server';
 import { audit } from '@/lib/audit';
+import { AttachmentQuotaError, storeAttachment } from '@/lib/attachments';
 import { requireAuth } from '@/lib/auth';
-import { env, isProduction } from '@/lib/env';
-import { csrfRejected, isSameOrigin, jsonError, unauthorized } from '@/lib/http';
-import { inspectUpload } from '@/lib/upload-security';
+import {
+  csrfRejected,
+  isSameOrigin,
+  jsonError,
+  rateLimited,
+  unauthorized,
+} from '@/lib/http';
+import { attachmentUploadLimiter } from '@/lib/rate-limit';
+import { inspectUpload, MAX_UPLOAD_BYTES } from '@/lib/upload-security';
 
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB
-const MAX_MULTIPART_BYTES = MAX_FILE_BYTES + 128 * 1024; // file + multipart overhead
-
-async function uploadToSupabase(
-  key: string,
-  body: Buffer,
-  contentType: string,
-): Promise<{ ok: true; url: string } | { ok: false; status: number; message: string }> {
-  const base = (env.SUPABASE_URL ?? '').replace(/\/$/, '');
-  const bucket = env.SUPABASE_STORAGE_BUCKET;
-  const serviceKey = env.SUPABASE_SERVICE_ROLE_KEY ?? '';
-
-  const objectPath = `${key}`;
-  const uploadUrl = `${base}/storage/v1/object/${encodeURIComponent(bucket)}/${objectPath
-    .split('/')
-    .map(encodeURIComponent)
-    .join('/')}`;
-
-  const response = await fetch(uploadUrl, {
-    method: 'POST',
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      apikey: serviceKey,
-      'Content-Type': contentType,
-      'x-upsert': 'false',
-    },
-    body: new Uint8Array(body),
-  });
-
-  if (!response.ok) {
-    const detail = await response.text().catch(() => '');
-    console.error('[upload] supabase rejected upload', response.status, detail.slice(0, 200));
-    return { ok: false, status: 502, message: 'Object storage rejected the upload.' };
-  }
-
-  return {
-    ok: true,
-    url: `${base}/storage/v1/object/public/${encodeURIComponent(bucket)}/${objectPath
-      .split('/')
-      .map(encodeURIComponent)
-      .join('/')}`,
-  };
-}
+const MAX_MULTIPART_BYTES = MAX_UPLOAD_BYTES + 128 * 1024; // file + multipart overhead
 
 export async function POST(request: Request) {
   if (!isSameOrigin(request)) return csrfRejected();
@@ -61,9 +23,13 @@ export async function POST(request: Request) {
   const user = await requireAuth();
   if (!user) return unauthorized();
 
+  // Bound storage abuse before reading or parsing the body.
+  const limit = await attachmentUploadLimiter.limit(user.id);
+  if (!limit.success) return rateLimited(limit.reset);
+
   const declaredLength = Number(request.headers.get('content-length'));
   if (Number.isFinite(declaredLength) && declaredLength > MAX_MULTIPART_BYTES) {
-    return jsonError(413, 'file_too_large', 'Files must be 10 MB or smaller.');
+    return jsonError(413, 'file_too_large', 'Files must be 4 MB or smaller.');
   }
 
   let formData: FormData;
@@ -79,69 +45,47 @@ export async function POST(request: Request) {
   }
 
   if (file.size === 0) return jsonError(400, 'empty_file', 'The file is empty.');
-  if (file.size > MAX_FILE_BYTES) {
-    return jsonError(413, 'file_too_large', 'Files must be 10 MB or smaller.');
+  if (file.size > MAX_UPLOAD_BYTES) {
+    return jsonError(413, 'file_too_large', 'Files must be 4 MB or smaller.');
   }
 
-  const body = Buffer.from(await file.arrayBuffer());
+  const body = new Uint8Array(await file.arrayBuffer());
   const inspected = inspectUpload(file.name, body);
   if (!inspected) {
     return jsonError(
       415,
       'unsupported_type',
-      'Unsupported file type. Upload a PNG, JPEG, GIF, WebP, PDF, or UTF-8 text/source file.',
+      'Unsupported file type. Upload a PNG, JPEG, GIF, WebP, a passive PDF, or a UTF-8 text/source file.',
     );
   }
 
-  const filename = inspected.fileName;
-  // User-scoped key: storage ownership mirrors database ownership.
-  const key = `${user.id}/${randomUUID()}-${filename}`;
-
-  if (env.SUPABASE_URL && env.SUPABASE_SERVICE_ROLE_KEY) {
-    const uploaded = await uploadToSupabase(key, body, inspected.mime);
-    if (!uploaded.ok) {
-      return jsonError(uploaded.status, 'upload_failed', uploaded.message);
+  let attachment;
+  try {
+    attachment = await storeAttachment({
+      userId: user.id,
+      fileName: inspected.fileName,
+      fileType: inspected.mime,
+      bytes: body,
+    });
+  } catch (error) {
+    if (error instanceof AttachmentQuotaError) {
+      return jsonError(
+        413,
+        'storage_quota_exceeded',
+        'Attachment storage limit reached. Delete an older conversation to free space.',
+      );
     }
-    await audit('attachment.uploaded', user.id, {
-      size: file.size,
-      type: inspected.mime,
-    });
-    return NextResponse.json({
-      attachment: {
-        fileUrl: uploaded.url,
-        fileType: inspected.mime,
-        fileSize: file.size,
-        fileName: filename,
-      },
-    });
-  }
-
-  if (isProduction) {
-    return jsonError(
-      501,
-      'storage_not_configured',
-      'Attachment storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY.',
+    console.error(
+      '[upload] failed to store attachment:',
+      error instanceof Error ? error.message : 'unknown',
     );
+    return jsonError(500, 'upload_failed', 'Could not store the attachment.');
   }
-
-  // Development-only fallback. Serverless filesystems are read-only/ephemeral,
-  // which is why this path is disabled in production.
-  const uploadsDir = path.join(process.cwd(), 'public', 'uploads');
-  await mkdir(uploadsDir, { recursive: true });
-  await writeFile(path.join(uploadsDir, filename), body);
 
   await audit('attachment.uploaded', user.id, {
-    size: file.size,
-    type: inspected.mime,
-    storage: 'local-development',
+    size: attachment.fileSize,
+    type: attachment.fileType,
   });
 
-  return NextResponse.json({
-    attachment: {
-      fileUrl: `/uploads/${filename}`,
-      fileType: inspected.mime,
-      fileSize: file.size,
-      fileName: filename,
-    },
-  });
+  return NextResponse.json({ attachment }, { status: 201 });
 }

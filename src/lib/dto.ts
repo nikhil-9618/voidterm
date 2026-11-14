@@ -7,6 +7,7 @@ export type AttachmentDTO = {
   fileUrl: string;
   fileType: string;
   fileSize: number;
+  fileName: string | null;
 };
 
 export type MessageDTO = {
@@ -59,6 +60,7 @@ export function toMessageDTO(message: Message & { attachments: Attachment[] }): 
       fileUrl: attachment.fileUrl,
       fileType: attachment.fileType,
       fileSize: attachment.fileSize,
+      fileName: attachment.fileName,
     })),
   };
 }

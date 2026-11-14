@@ -194,6 +194,7 @@ export function ChatView({
             fileUrl: attachment.fileUrl,
             fileType: attachment.fileType,
             fileSize: attachment.fileSize,
+            fileName: attachment.fileName ?? null,
           })),
           pending: true,
         };

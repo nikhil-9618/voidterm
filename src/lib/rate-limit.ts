@@ -176,6 +176,18 @@ export const otpVerifyLimiter = createLimiter(30, 60 * 60, 'otp:verify');
 /** 100 chat turns per authenticated user per hour. There is no daily message cap. */
 export const chatLimiter = createLimiter(100, 60 * 60, 'chat:user');
 
+/** 10 private attachment uploads per user per hour (50 MB storage quota). */
+export const attachmentUploadLimiter = createLimiter(10, 60 * 60, 'attachment:upload');
+
+/** Bound conversation-row creation so an authenticated client cannot spam the table. */
+export const conversationCreateLimiter = createLimiter(60, 60 * 60, 'conversation:create');
+
+/** 10 TOTP/recovery-code checks per 15 minutes (per IP). */
+export const mfaVerifyLimiter = createLimiter(10, 15 * 60, 'mfa:verify');
+
+/** 10 TOTP/recovery-code checks per 15 minutes (per account). */
+export const mfaUserLimiter = createLimiter(10, 15 * 60, 'mfa:user');
+
 /**
  * Resolve the client IP behind Vercel / Cloudflare / generic proxies.
  * Values are only used for rate limiting and coarse audit data.

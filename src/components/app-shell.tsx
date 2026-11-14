@@ -3,9 +3,10 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, PanelLeft, Search, X } from 'lucide-react';
+import { Menu, PanelLeft, PanelRight, Search, X } from 'lucide-react';
 import { BrandLogo } from '@/components/brand-logo';
 import { Sidebar } from '@/components/sidebar';
+import { ContextPanel } from '@/components/context-panel';
 import { CommandPalette } from '@/components/command-palette';
 import { SessionsDialog } from '@/components/sessions-dialog';
 import {
@@ -24,11 +25,15 @@ function Topbar({
   sidebarOpen,
   onToggleSidebar,
   onOpenPalette,
+  contextOpen,
+  onToggleContext,
 }: {
   onOpenMobileSidebar: () => void;
   sidebarOpen: boolean;
   onToggleSidebar: () => void;
   onOpenPalette: () => void;
+  contextOpen: boolean;
+  onToggleContext: () => void;
 }) {
   const pathname = usePathname();
   const { conversation, modelSpec } = useChatWorkspace();
@@ -72,6 +77,17 @@ function Topbar({
         <Button
           variant="ghost"
           size="icon-sm"
+          className="hidden xl:inline-flex"
+          onClick={onToggleContext}
+          aria-label="Toggle context panel"
+          aria-pressed={contextOpen}
+        >
+          <PanelRight className="h-4 w-4" />
+        </Button>
+
+        <Button
+          variant="ghost"
+          size="icon-sm"
           onClick={onOpenPalette}
           aria-label="Search and commands"
         >
@@ -94,6 +110,7 @@ export function AppShell({
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
+  const [contextOpen, setContextOpen] = useState(true);
 
   const { user: refreshedUser } = useMe({
     ...user,
@@ -133,6 +150,13 @@ export function AppShell({
         meta: true,
         allowInInput: false,
         handler: () => setSidebarOpen((current) => !current),
+      },
+      {
+        key: 'b',
+        meta: true,
+        shift: true,
+        allowInInput: false,
+        handler: () => setContextOpen((current) => !current),
       },
       {
         key: 'escape',
@@ -199,9 +223,13 @@ export function AppShell({
             sidebarOpen={sidebarOpen}
             onToggleSidebar={() => setSidebarOpen((current) => !current)}
             onOpenPalette={() => setPaletteOpen(true)}
+            contextOpen={contextOpen}
+            onToggleContext={() => setContextOpen((current) => !current)}
           />
           <main className="min-h-0 flex-1">{children}</main>
         </div>
+
+        <ContextPanel open={contextOpen} onClose={() => setContextOpen(false)} />
       </div>
 
       <CommandPalette

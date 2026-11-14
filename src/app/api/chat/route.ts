@@ -16,6 +16,7 @@ import { audit } from '@/lib/audit';
 import { classifyIntent } from '@/lib/ai/intent';
 import { getPolicyForIntent, refusalMessage } from '@/lib/ai/policy';
 import { buildSystemPrompt } from '@/lib/ai/safety-prompts';
+import { attachmentIdFromUrl, buildAttachmentContext } from '@/lib/attachments';
 import { streamWithFallback } from '@/lib/ai/fallback';
 import { getModelSpec, isSupportedModel } from '@/lib/ai/models';
 import { deriveConversationTitle } from '@/lib/dto';
@@ -129,6 +130,26 @@ export async function POST(request: Request) {
     });
   }
 
+  // Only attachments this user owns may be referenced. External URLs are kept
+  // as links but are never fetched server-side (no SSRF surface).
+  if (attachments) {
+    for (const attachment of attachments) {
+      const id = attachmentIdFromUrl(attachment.fileUrl);
+      if (!id) continue;
+      const owned = await prisma.attachmentBlob.count({ where: { id, userId: user.id } });
+      if (owned !== 1) {
+        return jsonError(400, 'invalid_attachment', 'Attachment not found.');
+      }
+    }
+  }
+
+  // Text attachments are included as clearly delimited untrusted data. The
+  // stored conversation keeps only the user's message, not the file contents.
+  const attachmentBlock = await buildAttachmentContext(user.id, attachments);
+  const promptMessage = attachmentBlock
+    ? `${message}\n\n<attachments>\n${attachmentBlock}\n</attachments>`
+    : message;
+
   if (user.tier >= 3) {
     await audit('tier3.access', user.id, { model, conversationId: conversationId ?? null });
   }
@@ -194,6 +215,7 @@ export async function POST(request: Request) {
                       fileUrl: attachment.fileUrl,
                       fileType: attachment.fileType,
                       fileSize: attachment.fileSize,
+                      fileName: attachment.fileName ?? null,
                     })),
                   },
                 }
@@ -243,6 +265,7 @@ export async function POST(request: Request) {
                     fileUrl: attachment.fileUrl,
                     fileType: attachment.fileType,
                     fileSize: attachment.fileSize,
+                    fileName: attachment.fileName ?? null,
                   })),
                 },
               }
@@ -267,12 +290,12 @@ export async function POST(request: Request) {
     }
     chatMessages = priorHistory.map(toChatMessage);
   } else if (isNewConversation) {
-    chatMessages = [{ role: 'user', content: message }];
+    chatMessages = [{ role: 'user', content: promptMessage }];
   } else {
     // 29 prior turns + the current one = the same 30-turn window as before.
     chatMessages = [
       ...priorHistory.slice(-29).map(toChatMessage),
-      { role: 'user', content: message },
+      { role: 'user', content: promptMessage },
     ];
   }
 

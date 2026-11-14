@@ -37,6 +37,12 @@ history, and deep research-grade answers for credentialed users. No daily messag
 - **Email OTP only** — six-digit codes, bcrypt-hashed, single-use, 10-minute expiry,
   5-attempt cap, rate-limited per email and IP. JWT + database-backed sessions (30 days),
   revocable per device. No password database.
+- **Optional TOTP MFA** — enrol an authenticator app from the Security dialog. Secrets are
+  AES-256-GCM encrypted at rest, eight single-use recovery codes are returned once, and a
+  correct email code only earns a five-minute challenge token until TOTP succeeds.
+- **Private attachments** — PNG/JPEG/GIF/WebP, passive PDFs, and UTF-8 text/source files up to
+  4 MB are stored in Postgres behind an ownership-checked download route. Text attachments are
+  included in the model prompt as clearly delimited untrusted data.
 - **Streaming SSE** — per-token events, a blinking `▋` cursor, abort/stop, partial saves on
   disconnect, and provider-reported usage when available.
 - **Command palette first** — `⌘K` fuzzy search across actions and sessions. Model selection is
@@ -129,7 +135,9 @@ Copy `.env.example` → `.env`. Never commit `.env`.
 | `DEEPSEEK_API_KEY` | one provider | V3 / R1. |
 | `OLLAMA_URL` | optional | Defaults to `http://localhost:11434`. |
 | `UPSTASH_REDIS_REST_URL` / `..._TOKEN` | prod | Shared rate limits + intent cache. Without them, production uses the shared Postgres limiter; development uses an in-process limiter. |
-| `SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` / `SUPABASE_STORAGE_BUCKET` | optional | Attachment storage. Without them, dev writes to `public/uploads`; production returns 501. |
+
+Attachments need no external bucket or credentials. Files are stored in Postgres and served
+only through an authenticated, ownership-scoped route; per-user storage is capped at 50 MB.
 
 ### Getting provider keys
 
@@ -144,7 +152,7 @@ Copy `.env.example` → `.env`. Never commit `.env`.
 | Resend | <https://resend.com/api-keys> | Transactional email. |
 | Upstash | <https://console.upstash.com> | Create a Redis database, copy the REST URL/token. |
 | Neon | <https://neon.tech> | Serverless Postgres; copy the pooled connection string. |
-| Supabase | <https://supabase.com> | Postgres + optional public storage bucket for attachments. |
+| Supabase | <https://supabase.com> | Optional managed Postgres for `DATABASE_URL`. |
 
 ### Resend domain verification (SPF, DKIM, DMARC)
 
@@ -192,7 +200,7 @@ src/
 │     ├─ auth/ send-otp, verify-otp, logout, me, sessions, logout-all
 │     ├─ chat/                     SSE stream + policy gate + persistence
 │     ├─ conversations/            CRUD, cursor messages, search, export
-│     └─ attachments/upload        Supabase Storage (dev-local fallback)
+│     └─ attachments/upload, [id]  private Postgres storage + authenticated download
 ├─ components/
 │  ├─ app-shell / sidebar / context-panel / command-palette / sessions-dialog
 │  ├─ chat/ chat-view, message-list, message-block, markdown-renderer,
@@ -218,7 +226,10 @@ src/
    `bcrypt.compare`, consume atomically, upsert user, create a Session row (SHA-256 of an
    independent random token, 30-day expiry), sign a 30-day HS256 JWT
    `{sub, sid, email, tier}`, set `session` as `HttpOnly; Secure (prod); SameSite=Lax; Path=/`.
-4. `GET /api/auth/me`, `POST /api/auth/logout`, `GET|DELETE /api/auth/sessions`,
+4. If TOTP MFA is enrolled, step 3 returns `{ mfaRequired: true, challenge }` and **no**
+   session cookie. `/verify` then posts the six-digit code (or a recovery code) to
+   `/api/auth/mfa/verify`, which consumes the five-minute challenge and creates the session.
+5. `GET /api/auth/me`, `POST /api/auth/logout`, `GET|DELETE /api/auth/sessions`,
    `POST /api/auth/logout-all`.
 
 The JWT is never trusted alone: `getSessionFromCookies()` verifies signature/claims **and**
@@ -291,7 +302,13 @@ This table is a product policy, not legal advice — review it with counsel for 
 | GET | `/api/conversations/[id]/messages` | `?cursor=&limit=` chronological page |
 | GET | `/api/conversations/search?q=` | Case-insensitive titles + message content |
 | GET | `/api/conversations/[id]/export?format=json\|markdown` | Download |
-| POST | `/api/attachments/upload` | Multipart, 10 MB, Supabase or dev-local |
+| POST | `/api/attachments/upload` | Multipart, 4 MB, private Postgres storage |
+| GET | `/api/attachments/[id]` | Authenticated, ownership-scoped download |
+| POST | `/api/auth/mfa/setup` | Start TOTP enrolment |
+| POST | `/api/auth/mfa/enable` | Confirm enrolment, return recovery codes once |
+| POST | `/api/auth/mfa/verify` | Exchange challenge + TOTP/recovery for a session |
+| POST | `/api/auth/mfa/disable` | Disable MFA after proving a valid code |
+| GET | `/api/auth/mfa/status` | MFA state for the signed-in user |
 
 `/api/chat/*`, `/api/conversations/*`, and `/api/user/*` are cookie-guarded in middleware and
 fully verified in each route. Every mutating route checks `Origin` against the request host in
@@ -321,15 +338,18 @@ addition to `SameSite=Lax`.
    Add the same URL to Vercel → Settings → Environment Variables.
 3. Add every required env var (`JWT_SECRET`, `EMAIL_FROM`, `RESEND_API_KEY`, provider keys,
    Upstash). Generate the JWT secret with `openssl rand -base64 48`; never reuse the dev one.
-4. Build command: `npm run build` (already runs `prisma generate`). Install command: `npm ci`.
+4. Build command: `npm run vercel-build` (runs `prisma generate && prisma migrate deploy && next build`).
+   Install command: `npm ci`. With this set on the project, every push to `main` applies
+   committed migrations before building, so Git deployments need no manual deploy step.
 5. Streaming routes need the Node runtime (already exported) and a plan whose function timeout
    supports 60s. On plans capped at 10s, long answers may cut off — use a container/Node host
    or shorten `maxDuration`.
 6. Verify production: `/login` renders, a real OTP email arrives, a chat turn streams, provider
    fallback is exercised by temporarily using an invalid primary key, and `/api/auth/sessions`
    shows the deployed session.
-7. **Ollama and `public/uploads` do not work on Vercel.** Use hosted providers and Supabase
-   Storage (make the bucket public, or adapt the upload route to signed URLs).8. If you use Upstash, rate limits and the intent cache are shared across instances. Without it, production uses the shared Postgres fixed-window limiter; development uses an in-process limiter. If the database limiter itself fails, the app temporarily falls back to per-instance memory.
+7. **Ollama does not work on Vercel.** Use hosted providers. Attachments work without extra
+   storage configuration: they are stored privately in Postgres and served through
+   `/api/attachments/[id]` (4 MB per file, 50 MB per user).8. If you use Upstash, rate limits and the intent cache are shared across instances. Without it, production uses the shared Postgres fixed-window limiter; development uses an in-process limiter. If the database limiter itself fails, the app temporarily falls back to per-instance memory.
 
 ### Docker (local services)
 
@@ -374,6 +394,13 @@ a small project at no model cost; beyond its rate limits, use a paid provider or
   invalidated when a new code is issued. The send endpoint never reveals account existence.
 - Session cookies are `HttpOnly`, `Secure` in production, `SameSite=Lax`, `Path=/`, 30 days.
   The JWT is verified **and** the Session row is checked; revocation is immediate.
+- TOTP secrets are AES-256-GCM encrypted at rest under a key derived from `JWT_SECRET`.
+  Recovery codes are independently bcrypt-hashed, single-use, and still work after a key
+  rotation; MFA verification is limited per IP and per account.
+- Attachments are private: bytes live in Postgres, reads require the owning session, responses
+  are `Content-Disposition: attachment` with `nosniff` and a sandbox CSP, and uploads are
+  rate-limited and quota-bounded. Text attachment contents are fenced as untrusted data in the
+  model prompt.
 - Every conversation/message/attachment read and write is scoped by the authenticated
   `userId`; missing resources return 404 rather than leaking existence.
 - Mutating routes validate the request `Origin` against the host (CSRF defence in depth),
@@ -393,8 +420,13 @@ a small project at no model cost; beyond its rate limits, use a paid provider or
 - Rate limiting uses Upstash when configured; production otherwise uses a shared Postgres fixed window. It falls back to per-process memory only if the database limiter itself fails.
 - Next.js 14.2.35 still has published advisories that require the breaking Next.js 16.4.5 upgrade.
 - CSP currently permits inline scripts because Next 14 injects them; move to a nonce policy with the major upgrade.
-- Attachments require a **public** Supabase bucket with the current URL scheme; switch to
-  signed URLs for private storage.
+- Attachments are private and database-backed. Images and PDFs are stored for reference but
+  are not sent to text-only models; text/source/JSON attachments are included in the prompt.
+  PDF uploads with JavaScript, launch actions, or embedded files are rejected, but there is no
+  full malware scanner.
+- Public OTP delivery requires a verified Resend domain. The default `onboarding@resend.dev`
+  sender only reaches the Resend account owner, so other addresses cannot complete sign-in
+  until `EMAIL_FROM` is updated.
 - Client-disconnect partial saves are best-effort: a hard platform kill can lose the tail of a
   response, but every completed `done` event is persisted before the event is sent.
 - `deepseek-reasoner` reasoning tokens are intentionally not surfaced in the UI.

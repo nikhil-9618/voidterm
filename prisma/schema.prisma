@@ -9,7 +9,7 @@ generator client {
 }
 
 datasource db {
-  provider = "postgresql"
+  provider  = "postgresql"
   url       = env("DATABASE_URL")
   directUrl = env("DIRECT_URL")
 }
@@ -25,9 +25,17 @@ model User {
   createdAt   DateTime  @default(now())
   lastLoginAt DateTime?
 
-  conversations Conversation[]
-  sessions      Session[]
-  otpCodes      OtpCode[]
+  // Optional TOTP second factor. The shared secret is encrypted at rest with a
+  // key derived from JWT_SECRET; recovery codes are HMAC-hashed, never stored
+  // in plaintext. `mfaEnabledAt` is the authoritative on/off switch.
+  mfaSecret             String?
+  mfaEnabledAt          DateTime?
+  mfaRecoveryCodeHashes String[]  @default([])
+
+  conversations   Conversation[]
+  sessions        Session[]
+  otpCodes        OtpCode[]
+  attachmentBlobs AttachmentBlob[]
 }
 
 // OTP codes are keyed by email because the account may not exist yet when a
@@ -103,10 +111,30 @@ model Attachment {
   fileUrl   String
   fileType  String
   fileSize  Int
+  fileName  String?
 
   message Message @relation(fields: [messageId], references: [id], onDelete: Cascade)
 
   @@index([messageId])
+}
+
+// Private attachment storage. Bytes live in Postgres because the deployment
+// has no object-storage credentials; every read goes through an authenticated,
+// ownership-checked download route instead of a public URL.
+model AttachmentBlob {
+  id        String   @id @default(cuid())
+  userId    String
+  fileName  String
+  fileType  String
+  fileSize  Int
+  sha256    String
+  data      Bytes
+  createdAt DateTime @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, createdAt])
+  @@index([createdAt])
 }
 
 model AuditLog {

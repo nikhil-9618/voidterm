@@ -1,6 +1,6 @@
 # VOIDTERM Security Audit & Implementation Report
 
-**Date:** 2026-11-06  
+**Date:** 2026-11-14 (second pass; original audit 2026-11-06)  
 **Application:** VOIDTERM (`https://voidterm.vercel.app`)  
 **Architecture:** Next.js 14 App Router, Node route handlers, Prisma + PostgreSQL (Neon), passwordless email OTP (Resend), Vercel hosting.
 
@@ -25,7 +25,11 @@ The highest-risk remaining item is the dependency baseline: Next.js 14.2.35 stil
 | 9 | Medium | No audit coverage for uploads or conversation deletion. | Added audit events for both. Existing OTP/login/session/policy events remain. |
 | 10 | Medium | No dependency-update automation. | Added weekly Dependabot configuration. |
 | 11 | Medium | `DIRECT_URL` was required by Prisma but missing from `.env.example`. | Documented it. |
-| 12 | Informational | Passwordless architecture has no password hashing/reset/MFA flows. | OTP codes are bcrypt cost 10; email verification is the login mechanism. Password reset is not applicable. TOTP MFA is **not implemented**. |
+| 12 | Informational | Passwordless architecture has no password hashing/reset/MFA flows. | OTP codes are bcrypt cost 10; email verification is the login mechanism. Password reset is not applicable. **Second pass:** optional TOTP MFA implemented. |
+| 13 | High | Production attachment uploads returned 501 because no Supabase storage was configured, and the old public-bucket design would have exposed files. | **Fixed:** private Postgres-backed storage with authenticated, ownership-scoped downloads. |
+| 14 | Medium | Uploaded attachments were persisted but never included in the model prompt, so the feature had no effect on answers. | **Fixed:** UTF-8 text/source/JSON attachment contents are bounded and fenced as untrusted data in the prompt. |
+| 15 | High | A stolen mailbox (the only factor) yielded a full session. | **Fixed:** opt-in TOTP MFA with encrypted secrets and single-use bcrypt recovery codes. |
+| 16 | Medium | The explicitly documented context panel was implemented but never mounted, and `⌘⇧B` did nothing. | **Fixed:** panel mounted with a topbar toggle and the documented shortcut. |
 
 ## 3. Controls verified in the original code
 
@@ -70,7 +74,7 @@ CSP uses `'unsafe-inline'` for scripts because Next.js 14 injects inline bootstr
 - Enforces 10 MiB file and multipart limits before parsing the body when a content length is present.
 - Adds `attachment.uploaded` audit events.
 
-**Residual:** the configured Supabase bucket is public and there is no malware scanner. Anyone with a stored object URL can read it. Move to a private bucket with short-lived signed URLs, and scan untrusted files, before treating attachments as confidential.
+**Superseded in the second pass:** the public Supabase-bucket design was removed. See §12 for private Postgres storage, authenticated downloads, quotas, and active-content PDF rejection. Malware scanning remains a residual risk (heuristics only).
 
 ### Distributed rate limiting
 `src/lib/rate-limit.ts` + `RateLimitBucket` migration:
@@ -111,7 +115,9 @@ CSP uses `'unsafe-inline'` for scripts because Next.js 14 injects inline bootstr
 
 No new required secret was introduced. Existing variables remain:
 
-`DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, `NEXT_PUBLIC_APP_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, AI provider keys, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`, `SUPABASE_URL`, `SUPABASE_SERVICE_ROLE_KEY`, `SUPABASE_STORAGE_BUCKET`.
+`DATABASE_URL`, `DIRECT_URL`, `JWT_SECRET`, `NEXT_PUBLIC_APP_URL`, `RESEND_API_KEY`, `EMAIL_FROM`, AI provider keys, `UPSTASH_REDIS_REST_URL`, `UPSTASH_REDIS_REST_TOKEN`.
+
+The second pass introduced **no new required variable**. TOTP secrets are encrypted with a key derived from `JWT_SECRET`; rotating it signs sessions out, and recovery codes still allow MFA users back in. `SUPABASE_*` variables are no longer read.
 
 `DIRECT_URL` is now documented in `.env.example`. `JWT_SECRET` must be at least 32 characters. In production, `UPSTASH_REDIS_REST_URL` and `UPSTASH_REDIS_REST_TOKEN` are recommended; without them the Postgres fallback is used.
 
@@ -188,7 +194,7 @@ The login page returned 200 in the cloud browser; all scripts/fonts loaded with 
 
 1. **Upgrade Next.js to 16.4.5+** (with React 19/async `cookies()` migration) to close the remaining critical/high advisories. This is the top priority.
 2. **Use Upstash in production** for globally accurate sliding windows. The Postgres fallback is shared but fixed-window and adds a write per limited request.
-3. **Make the Supabase bucket private**, serve attachments through an authorized, short-lived signed-URL endpoint, and add malware scanning.
+3. **Add malware scanning** to attachments. Storage is now private and download is authorized; the PDF active-content check is a heuristic, not an antivirus engine.
 4. **Move CSP to a nonce-based policy** after the Next major upgrade; the current policy still allows inline scripts.
 5. **Add TOTP MFA** only if the product needs a second factor beyond email possession. Password reset and password hashing are not applicable to the passwordless design.
 6. **Add alerting** for repeated OTP failures, rate-limit spikes, and new admin/privileged events. The audit table exists but there is no alert transport.
@@ -223,3 +229,78 @@ The login page returned 200 in the cloud browser; all scripts/fonts loaded with 
 - **Malware scanning:** not implemented.
 - **WAF/DDoS:** platform-level only; no custom rules.
 - **Security dashboard:** intentionally not added; audit logs are persisted and queryable in the database.
+
+## 12. Second pass (2026-11-14): functional repair and new controls
+
+### 12.1 Defects fixed
+
+- **Context panel was dead code.** `ContextPanel` was fully implemented but never mounted, so the model matrix, token/cost telemetry, system-prompt editor, fallback chain, and scanline toggle were unreachable. It is now mounted with a topbar toggle and the documented `⌘⇧B` shortcut.
+- **Production uploads were broken.** No object storage was configured on Vercel, so `POST /api/attachments/upload` returned `501`. Storage was also designed around a public Supabase bucket. Replaced with private, database-backed storage.
+- **Attachments never reached the model.** Bytes were validated and persisted, but only `fileUrl` metadata was stored; the model prompt contained no file content. Text attachments are now decoded, bounded, and included as untrusted reference data.
+- **OTP delivery limitation made explicit.** `EMAIL_FROM` is `VOIDTERM <onboarding@resend.dev>`. Resend's sandbox sender only delivers to the Resend account owner, so sign-in for other addresses cannot work until a sending domain is verified. The application now logs a prominent production warning; fixing it requires a DNS/Resend configuration change, not code.
+
+### 12.2 Private attachment storage
+
+- New `AttachmentBlob` table stores `userId`, canonical filename/MIME, size, SHA-256, and `BYTEA` content. `Attachment.fileName` preserves the display name.
+- Maximum file size is **4 MiB** (below Vercel's 4.5 MB function body limit); per-user storage quota is **50 MiB**; uploads are limited to **10 per user per hour**.
+- Magic-byte validation remains: PNG, JPEG, GIF, WebP, passive PDF, and UTF-8 text/source/JSON. HTML/SVG/executables are rejected. PDFs containing `/JavaScript`, `/JS`, `/Launch`, `/EmbeddedFile`, `/OpenAction`, or `/AA` are rejected.
+- `GET /api/attachments/[id]` requires a valid session, scopes the lookup by `userId`, returns `404` for another account's file, and sends `Content-Disposition: attachment`, `X-Content-Type-Options: nosniff`, `Content-Security-Policy: default-src 'none'; sandbox`, and `Cache-Control: private, no-store`. Downloads are audited.
+- No public object URL exists. Arbitrary external attachment URLs are accepted as links but are never fetched server-side, so the upload/chat path adds no SSRF surface.
+- **Prompt-injection defence:** text contents are capped (12k chars/file, 24k chars/request), stripped of control characters, wrapped in `<attachment>` elements, and the system prompt explicitly marks them as untrusted data that must not be followed as instructions. Raw file bytes are not duplicated into the stored message text.
+
+### 12.3 TOTP MFA
+
+- Opt-in per account; existing users are unaffected until they enrol.
+- 160-bit base32 secrets, RFC 6238 SHA-1/6-digit/30-second, ±1 step for clock drift.
+- Secrets are encrypted at rest with AES-256-GCM under an HKDF-derived key from `JWT_SECRET`. Recovery codes are independently bcrypt-hashed, single-use, and survive a JWT key rotation.
+- After a correct email code, `verify-otp` returns a five-minute signed `voidterm:mfa` challenge and **no session cookie**. `/api/auth/mfa/verify` consumes the challenge plus TOTP or recovery code before creating the session.
+- MFA verification is limited per IP and per account (10 attempts / 15 minutes each). A used recovery code is removed atomically with `array_remove`, so concurrent replays cannot both succeed.
+- Audited events: `auth.mfa_setup_started`, `auth.mfa_enabled`, `auth.mfa_challenge`, `auth.mfa_failed`, `auth.mfa_disable_failed`, `auth.mfa_disabled`, and `auth.login` with method `email_otp+totp` or `email_otp+recovery_code`.
+
+### 12.4 Other hardening
+
+- Conversation creation is limited to 60/user/hour, closing an authenticated row-spam path.
+- `SUPABASE_*` configuration was removed from the environment schema and example file; there is no longer a public-bucket mode.
+- Upload/attachment UI copy and limits now match the server (4 MB).
+
+### 12.5 Verification performed
+
+- `npx tsc --noEmit` passes.
+- `npm run build` passes on Next.js 14.2.35; all new routes are present in the route manifest.
+- All three migrations (`init`, `RateLimitBucket`, and `20261114230000_add_private_attachments_and_mfa`) applied cleanly to a fresh PostgreSQL 18 cluster.
+- **48/48 end-to-end checks passed** against a real local Next.js server, PostgreSQL, and a mock Ollama provider:
+  - OTP login, session cookie, `/api/auth/me`.
+  - Text upload, private URL, owner download, anonymous `401`, cross-account `404`, download headers.
+  - HTML-as-PNG `415`, active-content PDF `415`, 5 MB upload `413`.
+  - Chat streams, attachment text appears inside `<attachment>` in the captured model request, filename persists, raw bytes are not duplicated into message text.
+  - MFA setup, TOTP enable, 8 recovery codes, challenge-only email step, no pre-MFA cookie, wrong-code `400`, valid TOTP session, recovery-code session, single-use consumption, replay `400`, disable with TOTP.
+  - Foreign Origin `403`, cross-site Fetch Metadata `403`, non-JSON `400`, 300 KiB JSON `400`.
+- Production deployment and smoke tests are recorded in §13 after this change is shipped.
+
+### 12.6 Files added/changed in the second pass
+
+**Added**
+
+- `prisma/migrations/20261114230000_add_private_attachments_and_mfa/migration.sql`
+- `src/lib/attachments.ts`
+- `src/lib/mfa.ts`
+- `src/app/api/attachments/[id]/route.ts`
+- `src/app/api/auth/mfa/{setup,enable,disable,status,verify}/route.ts`
+
+**Changed**
+
+- `prisma/schema.prisma`, `src/lib/upload-security.ts`, `src/lib/rate-limit.ts`, `src/lib/dto.ts`, `src/lib/auth.ts`, `src/lib/env.ts`
+- `src/app/api/attachments/upload/route.ts`, `src/app/api/chat/route.ts`, `src/app/api/conversations/route.ts`, `src/app/api/auth/verify-otp/route.ts`, `src/app/api/auth/me/route.ts`
+- `src/lib/ai/safety-prompts.ts`
+- `src/app/verify/verify-form.tsx`, `src/components/chat/chat-input.tsx`, `src/components/chat/chat-view.tsx`, `src/components/chat/message-block.tsx`, `src/components/app-shell.tsx`, `src/components/sessions-dialog.tsx`, `src/components/sidebar.tsx`, `src/components/command-palette.tsx`
+- `README.md`, `.env.example`, `SECURITY_AUDIT.md`
+
+### 12.7 Remaining after the second pass
+
+1. **Verify a Resend sending domain** and set `EMAIL_FROM` to it; otherwise only the Resend account owner can sign in.
+2. **Upgrade Next.js to 16.4.5+** to close the remaining critical/high dependency advisories.
+3. **Add malware scanning** (the PDF check is heuristic).
+4. **Configure Upstash** for globally accurate sliding windows; the Postgres limiter is shared but fixed-window.
+5. **Move CSP to nonces** after the Next major upgrade.
+6. **Binary attachment understanding:** images/PDFs are stored privately but not sent to text-only models. Add vision or PDF text extraction deliberately, with size/cost bounds.
+7. **Database operations:** monitor the 50 MB/user attachment quota, verify Neon PITR/backups, and test a restore.

@@ -362,12 +362,12 @@ export function Sidebar({
                 variant="ghost"
                 size="icon-sm"
                 onClick={onManageSessions}
-                aria-label="Manage sessions"
+                aria-label="Security and sessions"
               >
                 <MonitorSmartphone className="h-4 w-4" />
               </Button>
             </TooltipTrigger>
-            <TooltipContent>Sessions</TooltipContent>
+            <TooltipContent>Security</TooltipContent>
           </Tooltip>
 
           <ThemeToggle />

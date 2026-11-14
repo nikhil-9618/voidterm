@@ -152,8 +152,8 @@ export function CommandPalette({
     {
       id: 'manage-sessions',
       type: 'action',
-      label: 'manage sessions',
-      hint: 'list and revoke devices',
+      label: 'security and sessions',
+      hint: 'two-factor auth and device revocation',
       icon: MonitorSmartphone,
       run: onManageSessions,
     },
