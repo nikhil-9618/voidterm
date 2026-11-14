@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { AlertTriangle, ArrowUpRight, X } from 'lucide-react';
+import { AlertTriangle, X } from 'lucide-react';
 import { BrandLogo } from '@/components/brand-logo';
 import type { MessageDTO } from '@/lib/dto';
 import type { TokenUsage } from '@/lib/ai/types';
@@ -41,33 +41,6 @@ type RunOptions = {
   regenerate?: boolean;
   addUser?: boolean;
 };
-
-const SUGGESTIONS = [
-  {
-    tag: 'sec',
-    label: 'threat-model a JWT auth flow',
-    prompt:
-      'Threat-model a stateless JWT authentication flow for a Next.js app. Enumerate concrete attack paths (token theft, CSRF, fixation, revocation gaps) and give mitigations for each.',
-  },
-  {
-    tag: 'research',
-    label: 'explain a CVE patch diff',
-    prompt:
-      'Walk me through how to read a CVE patch diff to judge exploitability, using a recent memory-safety vulnerability as the example. Include the exact git commands and what to look for.',
-  },
-  {
-    tag: 'code',
-    label: 'build a Rust log parser',
-    prompt:
-      'Write a production-quality Rust CLI that streams JSON logs, counts per-status-code requests, and writes a summary without unbounded memory. Include tests.',
-  },
-  {
-    tag: 'infra',
-    label: 'audit nginx hardening',
-    prompt:
-      'Give me a hardened nginx reverse-proxy baseline for a Next.js origin: TLS settings, header handling, request limits, and the specific misconfigurations you see most often.',
-  },
-];
 
 function localId(prefix: string): string {
   if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
@@ -532,11 +505,6 @@ export function ChatView({
     setFocusToken((token) => token + 1);
   }, []);
 
-  const applySuggestion = (prompt: string) => {
-    setDraft(prompt);
-    setFocusToken((token) => token + 1);
-  };
-
   return (
     <div className="flex h-full min-h-0 flex-col">
       <MessageList
@@ -557,27 +525,8 @@ export function ChatView({
                 What can I help with?
               </h1>
               <p className="mx-auto mt-2 max-w-md text-sm leading-relaxed text-muted">
-                Ask a question, paste code, or start with one of these.
+                Ask a question or paste code to get started.
               </p>
-
-              <div className="mt-8 grid gap-2.5 text-left sm:grid-cols-2">
-                {SUGGESTIONS.map((suggestion) => (
-                  <button
-                    key={suggestion.label}
-                    type="button"
-                    onClick={() => applySuggestion(suggestion.prompt)}
-                    className="group relative overflow-hidden rounded-xl border border-border bg-panel p-4 pr-10 text-left transition-all hover:-translate-y-0.5 hover:border-accent/30 hover:shadow-panel"
-                  >
-                    <span className="block text-[13px] font-medium text-fg">
-                      {suggestion.label}
-                    </span>
-                    <span className="mt-1 block text-[10px] uppercase tracking-[0.12em] text-dim">
-                      {suggestion.tag}
-                    </span>
-                    <ArrowUpRight className="absolute right-3.5 top-3.5 h-4 w-4 text-dim transition-all group-hover:-translate-y-0.5 group-hover:translate-x-0.5 group-hover:text-accent" />
-                  </button>
-                ))}
-              </div>
 
               <p className="mt-6 inline-flex items-center gap-2 rounded-full border border-border bg-panel/60 px-3 py-1.5 text-xs text-dim">
                 <span className="h-1.5 w-1.5 rounded-full bg-success" />
