@@ -359,7 +359,7 @@
     border-radius: 10px;
     padding: 10px;
     text-align: left;
-    transition: background 120ms ease, border-color 120 ease;
+    transition: background 120ms ease, border-color 120ms ease;
   }
 
   .model-grid-cell:hover {
