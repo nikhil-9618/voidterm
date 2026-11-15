@@ -87,6 +87,12 @@ export default async function LandingPage() {
             >
               Features
             </a>
+            <Link
+              href="/download"
+              className="rounded-lg px-3 py-2 text-[13px] font-medium text-muted transition-colors hover:bg-elevated hover:text-fg"
+            >
+              Android
+            </Link>
           </nav>
 
           <div className="ml-auto flex items-center gap-1.5">
@@ -335,7 +341,12 @@ export default async function LandingPage() {
             <BrandLogo idPrefix="landing-footer" className="h-5 w-auto" />
             <span>© 2026 VOIDTERM</span>
           </div>
-          <span>Six providers. One calm workspace.</span>
+          <div className="flex items-center gap-4">
+            <Link href="/download" className="transition-colors hover:text-fg">
+              Android app
+            </Link>
+            <span>Six providers. One calm workspace.</span>
+          </div>
         </div>
       </footer>
     </div>

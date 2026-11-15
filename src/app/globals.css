@@ -457,6 +457,27 @@
   }
 }
 
+@layer utilities {
+  .pb-safe {
+    padding-bottom: max(1rem, env(safe-area-inset-bottom));
+  }
+}
+
+@media (max-width: 1023px) {
+  html,
+  body {
+    overscroll-behavior-y: none;
+  }
+
+  body {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .voidterm-native {
+    overscroll-behavior: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

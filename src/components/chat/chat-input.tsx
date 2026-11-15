@@ -131,7 +131,7 @@ export function ChatInput({
   };
 
   return (
-    <div className="px-4 pb-4">
+    <div className="px-3 pb-safe pt-1 sm:px-4">
       <div className="mx-auto w-full max-w-3xl">
         <div className="composer-shadow rounded-2xl border border-border/80 bg-panel/90 p-2 transition-colors focus-within:border-accent/40">
           {attachments.length > 0 || uploadError ? (
@@ -266,17 +266,18 @@ export function ChatInput({
           </div>
         </div>
 
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] text-dim">
+        <div className="mt-2 hidden flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[10px] text-dim sm:flex">
           <span className="inline-flex items-center gap-1">
             <Kbd>↵</Kbd> send
           </span>
           <span className="inline-flex items-center gap-1">
             <Kbd>⇧↵</Kbd> new line
           </span>
-          <span className="hidden sm:inline">
-            VOIDTERM can make mistakes. Check important information.
-          </span>
+          <span>VOIDTERM can make mistakes. Check important information.</span>
         </div>
+        <p className="mt-2 text-center text-[10px] text-dim sm:hidden">
+          VOIDTERM can make mistakes. Check important information.
+        </p>
       </div>
     </div>
   );

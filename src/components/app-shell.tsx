@@ -1,9 +1,9 @@
 'use client';
 
-import { useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useState, type ReactNode } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
-import { Menu, PanelLeft, PanelRight, Search, X } from 'lucide-react';
+import { Menu, PanelLeft, PanelRight, Plus, Search } from 'lucide-react';
 import { BrandLogo } from '@/components/brand-logo';
 import { Sidebar } from '@/components/sidebar';
 import { ContextPanel } from '@/components/context-panel';
@@ -17,6 +17,7 @@ import {
 import { ProviderDot } from '@/components/provider-dot';
 import { Button } from '@/components/ui/button';
 import { useMe } from '@/hooks/use-me';
+import { useRecentsDrawer } from '@/hooks/use-recents-drawer';
 import { useKeyboardShortcuts, type ShortcutDefinition } from '@/hooks/use-keyboard-shortcuts';
 import { cn } from '@/lib/utils';
 
@@ -85,6 +86,14 @@ function Topbar({
           <PanelRight className="h-4 w-4" />
         </Button>
 
+        <Link
+          href="/c/new"
+          aria-label="New chat"
+          className="inline-flex h-8 w-8 items-center justify-center rounded-lg text-muted transition-colors hover:bg-elevated hover:text-fg lg:hidden"
+        >
+          <Plus className="h-4 w-4" />
+        </Link>
+
         <Button
           variant="ghost"
           size="icon-sm"
@@ -106,11 +115,54 @@ export function AppShell({
   children: ReactNode;
 }) {
   const router = useRouter();
+  const pathname = usePathname();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [mobileSidebarOpen, setMobileSidebarOpen] = useState(false);
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [sessionsOpen, setSessionsOpen] = useState(false);
   const [contextOpen, setContextOpen] = useState(true);
+
+  const { drawerRef, progress: recentsProgress, dragging: recentsDragging } =
+    useRecentsDrawer(mobileSidebarOpen, setMobileSidebarOpen);
+
+  // Navigation always dismisses the mobile drawer.
+  useEffect(() => {
+    setMobileSidebarOpen(false);
+  }, [pathname]);
+
+  // Bridge used by the Android wrapper's hardware back button. Returning true
+  // means the page consumed the back gesture; false lets WebView navigate back.
+  useEffect(() => {
+    const bridge = window as Window & {
+      __voidtermBack?: () => boolean;
+      __voidtermOpenRecents?: () => void;
+    };
+
+    bridge.__voidtermBack = () => {
+      if (mobileSidebarOpen) {
+        setMobileSidebarOpen(false);
+        return true;
+      }
+      if (paletteOpen) {
+        setPaletteOpen(false);
+        return true;
+      }
+      if (sessionsOpen) {
+        setSessionsOpen(false);
+        return true;
+      }
+      return false;
+    };
+    bridge.__voidtermOpenRecents = () => {
+      setPaletteOpen(false);
+      setMobileSidebarOpen(true);
+    };
+
+    return () => {
+      delete bridge.__voidtermBack;
+      delete bridge.__voidtermOpenRecents;
+    };
+  }, [mobileSidebarOpen, paletteOpen, sessionsOpen]);
 
   const { user: refreshedUser } = useMe({
     ...user,
@@ -187,15 +239,28 @@ export function AppShell({
           </div>
         </aside>
 
-        {mobileSidebarOpen ? (
-          <div className="fixed inset-0 z-40 lg:hidden">
+        {recentsProgress > 0 ? (
+          <div
+            className="fixed inset-0 z-50 lg:hidden"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Recent conversations"
+          >
             <button
               type="button"
-              className="absolute inset-0 bg-black/55 backdrop-blur-sm"
+              className="absolute inset-0 bg-black/60 backdrop-blur-sm"
+              style={{ opacity: recentsProgress }}
               onClick={() => setMobileSidebarOpen(false)}
-              aria-label="Close sidebar overlay"
+              aria-label="Close recents"
             />
-            <aside className="relative h-full w-[280px] border-r border-border bg-panel shadow-panel">
+            <aside
+              ref={drawerRef}
+              className={cn(
+                'relative flex h-full w-[86vw] max-w-[340px] flex-col overflow-hidden rounded-r-3xl border-r border-border bg-panel shadow-panel',
+                recentsDragging ? '' : 'transition-transform duration-200 ease-out',
+              )}
+              style={{ transform: `translateX(${(recentsProgress - 1) * 100}%)` }}
+            >
               <Sidebar
                 onNavigate={() => setMobileSidebarOpen(false)}
                 onManageSessions={() => {
@@ -204,15 +269,6 @@ export function AppShell({
                 }}
                 onClose={() => setMobileSidebarOpen(false)}
               />
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                className="absolute right-2 top-3"
-                onClick={() => setMobileSidebarOpen(false)}
-                aria-label="Close sidebar"
-              >
-                <X className="h-4 w-4" />
-              </Button>
             </aside>
           </div>
         ) : null}

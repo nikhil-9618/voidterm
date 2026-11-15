@@ -242,7 +242,7 @@ export function Sidebar({
   };
 
   return (
-    <div className="sidebar-sheen flex h-full w-[264px] flex-col">
+    <div className="sidebar-sheen flex h-full w-full flex-col">
       <div className="flex h-14 items-center justify-between px-4">
         <Link
           href="/c/new"
