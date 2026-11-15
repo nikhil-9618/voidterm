@@ -1,9 +1,25 @@
 'use client';
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import dynamic from 'next/dynamic';
 import { ArrowDown } from 'lucide-react';
 import type { ChatMessageView } from './types';
-import { MessageBlock } from './message-block';
+
+// Markdown parsing and syntax highlighting are only needed once a conversation
+// has messages. Keeping them out of the route's initial bundle makes a new chat
+// (and the app shell) interactive before that code is fetched.
+const MessageBlock = dynamic(
+  () => import('./message-block').then((module) => module.MessageBlock),
+  {
+    loading: () => (
+      <div className="mb-8 animate-pulse space-y-2" aria-hidden="true">
+        <div className="h-4 w-28 rounded bg-elevated" />
+        <div className="h-3 w-full rounded bg-elevated" />
+        <div className="h-3 w-5/6 rounded bg-elevated" />
+      </div>
+    ),
+  },
+);
 
 export function MessageList({
   messages,

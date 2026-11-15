@@ -7,8 +7,8 @@ const isProduction = process.env.NODE_ENV === 'production';
 const contentSecurityPolicy = [
   "default-src 'self'",
   `script-src 'self' 'unsafe-inline'${isProduction ? '' : " 'unsafe-eval'"}`,
-  "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
-  "font-src 'self' https://fonts.gstatic.com",
+  "style-src 'self' 'unsafe-inline'",
+  "font-src 'self'",
   "img-src 'self' data: blob: https:",
   "connect-src 'self'" + (isProduction ? '' : ' ws: wss:'),
   "media-src 'self'",
